@@ -1,14 +1,24 @@
 from django.shortcuts import render, get_object_or_404
-from django.http import HttpRequest, HttpResponse
+from django.http import HttpRequest, HttpResponse, HttpResponseNotAllowed
 from django.core.paginator import Paginator, EmptyPage, PageNotAnInteger
 from django.core.mail import send_mail
 from django.views.decorators.http import require_POST
+from django.db.models.aggregates import Count
+from django.contrib.postgres.search import SearchVector
+
+from taggit.models import Tag
+
 from .models import Post, Comment
-from .forms import EmailPostForm, CommentForm
+from .forms import EmailPostForm, CommentForm, SearchForm
 
 # Create your views here.
-def post_list(request: HttpRequest) -> HttpResponse:
+def post_list(request: HttpRequest, tag_slug: str = None) -> HttpResponse:
     posts_list = Post.objects.all()
+
+    tag = None
+    if tag_slug:
+        tag = get_object_or_404(Tag, slug=tag_slug)
+        posts_list = posts_list.filter(tags__in=[tag])
 
     paginator = Paginator(object_list=posts_list, per_page=3)
     
@@ -23,6 +33,7 @@ def post_list(request: HttpRequest) -> HttpResponse:
 
     context = dict(
         posts=posts,
+        tag=tag,
     )
 
     return render(request=request, template_name='blog/post/list.html', context=context)
@@ -33,18 +44,23 @@ def post_detail(request: HttpRequest, year: int, month: int, day: int, slug: str
     comments = post.comments.filter(active=True)
 
     form = CommentForm()
+
+    post_tags_ids = post.tags.values_list('pk', flat=True)
+    similar_posts = Post.objects.filter(tags__in=post_tags_ids).exclude(pk=post.pk)
+    similar_posts = similar_posts.annotate(same_tags=Count('tags')).order_by('-same_tags', '-publish')[:3]
     
     context = dict(
         post=post,
         comments=comments,
         form=form,
+        similar_posts=similar_posts,
     )
 
     return render(request=request, template_name='blog/post/detail.html', context=context)
 
 
-def post_share(request: HttpRequest, post_id: int) -> HttpResponse:
-    post = get_object_or_404(klass=Post, pk=post_id, status=Post.Status.PUBLISHED)
+def post_share(request: HttpRequest, post_pk: int) -> HttpResponse:
+    post = get_object_or_404(klass=Post, pk=post_pk, status=Post.Status.PUBLISHED)
 
     sent = False
 
@@ -74,8 +90,8 @@ def post_share(request: HttpRequest, post_id: int) -> HttpResponse:
 
 
 @require_POST
-def post_comment(request: HttpRequest, post_id: int) -> HttpResponse:
-    post = get_object_or_404(klass=Post, pk=post_id, status=Post.Status.PUBLISHED)
+def post_comment(request: HttpRequest, post_pk: int) -> HttpResponse | HttpResponseNotAllowed:
+    post = get_object_or_404(klass=Post, pk=post_pk, status=Post.Status.PUBLISHED)
 
     comment = None
 
@@ -92,3 +108,22 @@ def post_comment(request: HttpRequest, post_id: int) -> HttpResponse:
     )
 
     return render(request=request, template_name='blog/post/comment.html', context=context)
+
+def post_search(request: HttpRequest) -> HttpResponse:
+    form = SearchForm()
+    query = None
+    results = list()
+
+    if 'query' in request.GET:
+        form = SearchForm(data=request.GET)
+        if form.is_valid():
+            query = form.cleaned_data.get('query')
+            results = Post.published.annotate(search=SearchVector('title', 'body')).filter(search=query)
+
+    context = dict(
+        form=form,
+        query=query,
+        results=results,
+    )
+
+    return render(request=request, template_name='blog/post/search.html', context=context)

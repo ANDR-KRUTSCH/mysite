@@ -3,6 +3,8 @@ from django.conf import settings
 from django.urls import reverse
 from django.utils import timezone
 
+from taggit.managers import TaggableManager
+
 # Create your models here.
 class PublishManager(models.Manager):
     def get_queryset(self) -> models.QuerySet:
@@ -24,6 +26,7 @@ class Post(models.Model):
 
     objects = models.Manager()
     published = PublishManager()
+    tags = TaggableManager()
 
     class Meta:
         ordering = (
@@ -41,7 +44,7 @@ class Post(models.Model):
         return self.title
     
     def get_absolute_url(self) -> str:
-        return reverse('blog:post_detail', args=[self.publish.year, self.publish.month, self.publish.day, self.slug])
+        return reverse(viewname='blog:post_detail', args=[self.publish.year, self.publish.month, self.publish.day, self.slug])
     
 
 class Comment(models.Model):
@@ -65,5 +68,5 @@ class Comment(models.Model):
             ),
         )
 
-    def __str__(self):
+    def __str__(self) -> str:
         return f'Comment by {self.name} on {self.post}'
